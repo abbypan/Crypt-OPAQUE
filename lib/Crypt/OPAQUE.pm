@@ -8,8 +8,6 @@ use bignum;
 require Exporter;
 
 use Crypt::KeyDerivation ':all';
-#$prk  = hkdf_extract($keying_material, $salt, $hash_name);
-#$okm1 = hkdf_expand($prk, $hash_name, $len, $info);
 
 use Carp;
 use Crypt::OpenSSL::Hash2Curve;

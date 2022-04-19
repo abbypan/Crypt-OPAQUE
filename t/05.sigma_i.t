@@ -5,7 +5,7 @@
 use strict;
 use warnings;
 
-use lib '../lib';
+#use lib '../lib';
 
 use bignum;
 use Smart::Comments;
@@ -35,9 +35,6 @@ use CBOR::XS;
 
 use bignum;
 use FindBin qw($Bin);
-use Crypt::SIGMA;
-use Crypt::KeyDerivation ':all';
-use Crypt::AuthEnc::GCM qw(gcm_encrypt_authenticate gcm_decrypt_verify);
 
 my $prefix = "VOPRF09-";
 my $mode = 0x00;
@@ -114,16 +111,14 @@ my $cipher_name      = 'AES';
 #my $point_compress_t = 2;
 
 my $enc_func = sub {
-  my ( $ke, $plaintext, $pack_msg_func ) = @_;
+  my ( $ke, $plaintext ) = @_;
   my $iv = Crypt::OpenSSL::Bignum->rand_range( $iv_range );
   my ( $ciphertext, $tag ) = gcm_encrypt_authenticate( $cipher_name, $ke, $iv->to_bin, undef, $plaintext );
-
-  my $cipher_info = $pack_msg_func->( [ $iv->to_bin, $ciphertext, $tag ] );
+my $cipher_info_r = [ $iv->to_bin, $ciphertext, $tag ];
   ### iv: $iv->to_hex
   ### ciphertext: unpack("H*", $ciphertext)
   ### tag: unpack("H*", $tag)
-  ### cipher_info: unpack("H*", $cipher_info)
-  return $cipher_info;
+  return $cipher_info_r;
 };
 
 my $dec_func = sub {
@@ -139,14 +134,14 @@ my $dec_func = sub {
 #my $mac_func = \&hmac_sha256;
 
 my $sig_verify_func = sub {
-  my ( $pkey_fname, $tbs, $r, $s ) = @_;
+  my ( $tbs, $sig_r, $pkey_fname ) = @_;
 
   my $a_know_b_s_pub_pkey = pem_read_pkey( $pkey_fname, 0 );
   my $a_know_b_s_pub      = EVP_PKEY_get1_EC_KEY( $a_know_b_s_pub_pkey );
 
   my $a_recv_sig = Crypt::OpenSSL::ECDSA::ECDSA_SIG->new();
-  $a_recv_sig->set_r( $r );
-  $a_recv_sig->set_s( $s );
+  $a_recv_sig->set_r( $sig_r->[0] );
+  $a_recv_sig->set_s( $sig_r->[1] );
 
   my $a_verify = Crypt::OpenSSL::ECDSA::ECDSA_do_verify( $tbs, $a_recv_sig, $a_know_b_s_pub );
   ### verify sig : $a_verify
@@ -200,12 +195,9 @@ is($cred_res_r->{masked_response}, pack("H*", 'adb901cb9a50203d9df723560fafa4ce2
 
 my $other_data_b = encode_cbor([ @{$cred_res_r}{qw/Z masking_nonce masked_response/} ]);
 my $b_send_msg2_r = b_send_msg2(
-  $group, $b_recv_msg1_r, $id_b, $random_range, $point_compress_t, $hash_name, $key_len, \&encode_cbor,
+  $group, $b_recv_msg1_r, $id_b, "$Bin/b_s_priv.pem",$random_range, $point_compress_t, $hash_name, $key_len, \&encode_cbor,
   $mac_func,
-  sub {
-    my ( $b_tbs ) = @_;
-    $sign_func->( "$Bin/b_s_priv.pem", $b_tbs );
-  },
+    $sign_func,
   $enc_func,
   $ctx,
   $other_data_b, 
@@ -265,13 +257,10 @@ pem_write_evp_pkey("$Bin/a_recover_c_s_priv.pem", $a_recover_a_s_priv_pkey, 1);
 my $a_recover_b_s_pub_pkey = evp_pkey_from_point_hex($group, unpack("H*", $recover_r->{s_pub}), $ctx);
 pem_write_evp_pkey("$Bin/a_recover_b_s_pub.pem", $a_recover_b_s_pub_pkey, 0);
 my $a_verify_msg2 = a_verify_msg2(
-    $msg1_r, $a_recv_msg2_r, 
+    $msg1_r, $a_recv_msg2_r, "$Bin/a_recover_b_s_pub.pem",
   \&encode_cbor, 
   $mac_func,
-  sub {
-    my ( $tbs, $r, $s ) = @_;
-    $sig_verify_func->( "$Bin/a_recover_b_s_pub.pem", $tbs, $r, $s );
-  },
+  $sig_verify_func, 
 );
 
 my $a_recv_ek_b_pub_pkey = evp_pkey_from_point_hex( $group, unpack( "H*", $a_recv_msg2_r->{gy} ), $ctx );
@@ -279,14 +268,12 @@ pem_write_evp_pkey( 'a_recv_b_ek_pub.pem', $a_recv_ek_b_pub_pkey, 0 );
 
 my $a_send_msg3 = a_send_msg3(
   $id_a,
+"$Bin/a_recover_c_s_priv.pem", 
   $msg1_r, 
   $a_recv_msg2_r, 
   \&encode_cbor,
   $mac_func,
-  sub {
-    my ( $tbs ) = @_;
-    $sign_func->( "$Bin/a_recover_c_s_priv.pem", $tbs );
-  },
+    $sign_func, 
   $enc_func,
 
 );
@@ -299,12 +286,10 @@ my $msg3_verify_res = b_recv_msg3(
   $b_recv_msg1_r, 
   $b_send_msg2_r,
   $a_send_msg3,
+"$Bin/b_recv_a_s_pub.pem", 
   \&encode_cbor, \&decode_cbor,
   $mac_func,
-  sub {
-    my ( $tbs, $r, $s ) = @_;
-    $sig_verify_func->( "$Bin/b_recv_a_s_pub.pem", $tbs, $r, $s );
-  },
+    $sig_verify_func, 
   $dec_func,
 );
 ### $msg3_verify_res
